@@ -186,6 +186,25 @@ options:
         required: false
         choices: ["DAEMON", "REPLICA"]
         type: str
+    capacity_provider_strategy:
+        description: list of capacity provider strategy objects
+        type: list
+        elements: dict
+        suboptions:
+            capacityProvider:
+                description: The short name of the capacity provider.
+                returned: always
+                type: str
+            weight:
+                description: The weight value designates the relative percentage of the total number of tasks launched that should use
+                             the specified capacity provider.
+                returned: always
+                type: int
+            base:
+                description: The base value designates how many tasks, at a minimum, to run on the specified capacity provider.
+                             Only one capacity provider in a capacity provider strategy can have a base defined.
+                returned: always
+                type: int
 extends_documentation_fragment:
 - amazon.aws.aws
 - amazon.aws.ec2
@@ -352,6 +371,26 @@ service:
                                  such as attribute:ecs.availability-zone. For the binpack placement strategy, valid values are CPU and MEMORY.
                     returned: always
                     type: str
+        capacityProviderStrategy:
+            description: list of capacity provider strategy objects
+            returned: always
+            type: list
+            elements: dict
+            contains:
+                capacityProvider:
+                    description: The short name of the capacity provider.
+                    returned: always
+                    type: str
+                weight:
+                    description: The weight value designates the relative percentage of the total number of tasks launched that should use
+                                 the specified capacity provider.
+                    returned: always
+                    type: int
+                base:
+                    description: The base value designates how many tasks, at a minimum, to run on the specified capacity provider.
+                                 Only one capacity provider in a capacity provider strategy can have a base defined.
+                    returned: always
+                    type: int
 
 ansible_facts:
     description: Facts about deleted service.
@@ -559,7 +598,8 @@ class EcsServiceManager:
     def create_service(self, service_name, cluster_name, task_definition, load_balancers,
                        desired_count, client_token, role, deployment_configuration,
                        placement_constraints, placement_strategy, health_check_grace_period_seconds,
-                       network_configuration, service_registries, launch_type, scheduling_strategy):
+                       network_configuration, service_registries, launch_type, scheduling_strategy,
+                       capacity_provider_strategy):
 
         params = dict(
             cluster=cluster_name,
@@ -583,15 +623,18 @@ class EcsServiceManager:
         # desired count is not required if scheduling strategy is daemon
         if desired_count is not None:
             params['desiredCount'] = desired_count
-
         if scheduling_strategy:
             params['schedulingStrategy'] = scheduling_strategy
+        if capacity_provider_strategy:
+            params['capacityProviderStrategy'] =  capacity_provider_strategy
+
         response = self.ecs.create_service(**params)
         return self.jsonize(response['service'])
 
     def update_service(self, service_name, cluster_name, task_definition,
                        desired_count, deployment_configuration, network_configuration,
-                       health_check_grace_period_seconds, force_new_deployment):
+                       health_check_grace_period_seconds, force_new_deployment,
+                       capacity_provider_strategy):
         params = dict(
             cluster=cluster_name,
             service=service_name,
@@ -606,6 +649,8 @@ class EcsServiceManager:
         # desired count is not required if scheduling strategy is daemon
         if desired_count is not None:
             params['desiredCount'] = desired_count
+        if capacity_provider_strategy:
+            params['capacityProviderStrategy'] =  capacity_provider_strategy
 
         response = self.ecs.update_service(**params)
         return self.jsonize(response['service'])
@@ -684,7 +729,18 @@ def main():
         )),
         launch_type=dict(required=False, choices=['EC2', 'FARGATE']),
         service_registries=dict(required=False, type='list', default=[], elements='dict'),
-        scheduling_strategy=dict(required=False, choices=['DAEMON', 'REPLICA'])
+        scheduling_strategy=dict(required=False, choices=['DAEMON', 'REPLICA']),
+        capacity_provider_strategy=dict(
+            required=False,
+            default=[],
+            type='list',
+            elements='dict',
+            options=dict(
+               capacityProvider=dict(type='str'),
+               weight=dict(type='int'),
+               base=dict(type='int')
+            )
+        )
     )
 
     module = AnsibleAWSModule(argument_spec=argument_spec,
@@ -721,6 +777,8 @@ def main():
     if module.params['launch_type']:
         if not module.botocore_at_least('1.8.4'):
             module.fail_json(msg='botocore needs to be version 1.8.4 or higher to use launch_type')
+    if module.params['launch_type'] and module.params['capacity_provider_strategy']:
+        module.fail_json(msg='launch_type and capacity_provider_strategy are mutually exclusive')
     if module.params['force_new_deployment']:
         if not module.botocore_at_least('1.8.4'):
             module.fail_json(msg='botocore needs to be version 1.8.4 or higher to use force_new_deployment')
@@ -784,7 +842,8 @@ def main():
                                                           deploymentConfiguration,
                                                           network_configuration,
                                                           module.params['health_check_grace_period_seconds'],
-                                                          module.params['force_new_deployment'])
+                                                          module.params['force_new_deployment'],
+                                                          module.params['capacity_provider_strategy'])
 
                 else:
                     try:
@@ -802,7 +861,8 @@ def main():
                                                               network_configuration,
                                                               serviceRegistries,
                                                               module.params['launch_type'],
-                                                              module.params['scheduling_strategy']
+                                                              module.params['scheduling_strategy'],
+                                                              module.params['capacity_provider_strategy']
                                                               )
                     except botocore.exceptions.ClientError as e:
                         module.fail_json_aws(e, msg="Couldn't create service")
